@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Killarney: modules, venv, and path defaults (see HAD/killarney-dev.sh, HAD/KILLARNEY.md).
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/killarney-dev.sh"
+
 DATASET="${DATASET:-dl3dv}"
-
-# Hard-coded local default for the released training entry point.
-# Change this path if the repository is cloned somewhere else.
-PROJECT_ROOT="/home/xi9/code/DreamAware3D_open_source"
-
-# Hard-coded local defaults used on our machine. Override these environment
-# variables when running with a different dataset, output root, or checkpoint.
-OUTPUT_ROOT="${OUTPUT_ROOT:-/project/siyuh/common/xiliu/HAD_CVPR2026_V2/outputs}"
+PROJECT_ROOT="${PROJECT_ROOT:-${SCRIPT_DIR}}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch/${USER}/had/outputs}"
 LVSM_ROOT="${LVSM_ROOT:-${PROJECT_ROOT}/LVSM}"
-LVSM_CKPT_PATH="${LVSM_CKPT_PATH:-/home/xi9/code/LVSM/experiments/checkpoints/LVSM_decoder_only_conf_Resi_unet_512}"
+LVSM_CKPT_PATH="${LVSM_CKPT_PATH:-${PROJECT_ROOT}/checkpoints/LVSM_decoder_only_conf_Resi_unet_512}"
 
 SCENE="${1:?usage: ./run_train_scene.sh SCENE_ID_OR_DATA_DIR [SPARSE_VIEW] [MAX_STEPS]}"
 SPARSE_VIEW="${2:-${SPARSE_VIEW:-9}}"
@@ -20,14 +20,12 @@ FORCE_RERUN="${FORCE_RERUN:-0}"
 SPLIT_JSON="${SPLIT_JSON:-}"
 
 if [ "${DATASET}" = "mipnerf360" ]; then
-  # Hard-coded Mip-NeRF 360 default path on our machine.
-  DATA_ROOT="${DATA_ROOT:-${MIPNERF_DATA_ROOT:-/project/siyuh/common/xiliu/MipNeRF360}}"
+  DATA_ROOT="${DATA_ROOT:-${MIPNERF_DATA_ROOT:-${HAD_MIPNERF_DATA_ROOT:-}}}"
   MAX_STEPS="${3:-${MAX_STEPS:-20000}}"
   VIEW_FUSION="${VIEW_FUSION:-1}"
   TARGET_SAMPLE_STEP="${TARGET_SAMPLE_STEP:-1}"
 else
-  # Hard-coded DL3DV default path on our machine.
-  DATA_ROOT="${DATA_ROOT:-/project/siyuh/common/xiliu/DL3DV-10K-Benchmark}"
+  DATA_ROOT="${DATA_ROOT:-${HAD_DL3DV_DATA_ROOT:-}}"
   MAX_STEPS="${3:-${MAX_STEPS:-20000}}"
   VIEW_FUSION="${VIEW_FUSION:-3}"
   TARGET_SAMPLE_STEP="${TARGET_SAMPLE_STEP:-2}"
@@ -74,6 +72,11 @@ if [ "${FORCE_RERUN}" != "1" ] && [ -s "${FINAL_STATS}" ]; then
   exit 0
 fi
 
+if [ -z "${DATA_ROOT}" ]; then
+  echo "Missing DATA_ROOT (set DATA_ROOT or HAD_DL3DV_DATA_ROOT / HAD_MIPNERF_DATA_ROOT)" >&2
+  exit 2
+fi
+
 if [ ! -d "${DATA_DIR}" ]; then
   echo "Missing data dir: ${DATA_DIR}" >&2
   exit 2
@@ -99,18 +102,9 @@ if [ "${USE_LVSM}" = "1" ] && [ ! -e "${LVSM_CKPT_PATH}" ]; then
   exit 2
 fi
 
-# Hard-coded environment setup for our cluster. Adapt these lines if your CUDA
-# module name or conda environment is different.
-source /etc/profile.d/modules.sh 2>/dev/null || true
-module add cuda/11.8.0 2>/dev/null || true
-export PATH="$HOME/miniconda3/bin:$PATH"
-source activate difix3D
-
 cd "${PROJECT_ROOT}"
 mkdir -p "${OUTPUT_DIR}"
-export PYTHONPATH="${PROJECT_ROOT}:${PROJECT_ROOT}/examples/gsplat:${PROJECT_ROOT}/examples/gsplat/pycolmap:$(dirname "${LVSM_ROOT}"):$PYTHONPATH"
-export LVSM_ROOT="${LVSM_ROOT}"
-export LVSM_CKPT_PATH="${LVSM_CKPT_PATH}"
+had_export_pythonpath
 
 echo "Scene: ${SCENE_ID}"
 echo "Data: ${DATA_DIR}"
@@ -120,19 +114,41 @@ if [ -n "${SPLIT_JSON}" ]; then
   echo "Split json: ${SPLIT_JSON}"
 fi
 
-python "${PROJECT_ROOT}/examples/gsplat/train_dreamaware3d.py" mcmc \
-  --data_dir "${DATA_DIR}" \
-  --data_factor "${DATA_FACTOR}" \
-  --result_dir "${OUTPUT_DIR}" \
-  --no-use_eval \
-  --no-use_pefect_conf \
-  ${CONF_FLAG} \
-  --no-partial_setting \
-  ${LVSM_FLAG} \
-  --no-lvsm_mode \
-  --no-normalize-world-space \
-  --num_sparse_view "${SPARSE_VIEW}" \
-  --target_sample_step "${TARGET_SAMPLE_STEP}" \
-  --max_steps "${MAX_STEPS}" \
-  --view_fusion "${VIEW_FUSION}" \
+TRAIN_SCRIPT="${PROJECT_ROOT}/examples/gsplat/train_dreamaware3d.py"
+TRAIN_ARGS=(
+  mcmc
+  --data_dir "${DATA_DIR}"
+  --data_factor "${DATA_FACTOR}"
+  --result_dir "${OUTPUT_DIR}"
+  --no-use_eval
+  --no-use_pefect_conf
+  ${CONF_FLAG}
+  --no-partial_setting
+  ${LVSM_FLAG}
+  --no-lvsm_mode
+  --no-normalize-world-space
+  --num_sparse_view "${SPARSE_VIEW}"
+  --target_sample_step "${TARGET_SAMPLE_STEP}"
+  --max_steps "${MAX_STEPS}"
+  --view_fusion "${VIEW_FUSION}"
   "${SPLIT_ARGS[@]}"
+)
+
+if [ "${HAD_DEBUGPY:-0}" = "1" ]; then
+  DEBUGPY_PORT="${HAD_DEBUGPY_PORT:-5678}"
+  DEBUGPY_WAIT="${HAD_DEBUGPY_WAIT:-1}"
+  if ! python -c "import debugpy" 2>/dev/null; then
+    echo "Missing debugpy — run: pip install debugpy" >&2
+    exit 2
+  fi
+  DEBUGPY_LISTEN_ARGS=(--listen "127.0.0.1:${DEBUGPY_PORT}")
+  if [ "${DEBUGPY_WAIT}" = "1" ]; then
+    DEBUGPY_LISTEN_ARGS+=(--wait-for-client)
+  fi
+  echo "debugpy: listen 127.0.0.1:${DEBUGPY_PORT} wait=${DEBUGPY_WAIT}"
+  echo "debugpy: VS Code → Run and Debug → Attach to GPU training (Killarney)"
+  echo "debugpy: on login node, tunnel: ssh -N -L ${DEBUGPY_PORT}:127.0.0.1:${DEBUGPY_PORT} $(hostname)"
+  python -m debugpy "${DEBUGPY_LISTEN_ARGS[@]}" "${TRAIN_SCRIPT}" "${TRAIN_ARGS[@]}"
+else
+  python "${TRAIN_SCRIPT}" "${TRAIN_ARGS[@]}"
+fi
