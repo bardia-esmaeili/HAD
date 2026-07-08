@@ -39,12 +39,11 @@ killarney_gpu_interactive   # uses srun, not salloc
 Load **before** creating or activating the venv:
 
 ```bash
-module load gcc opencv/4.13.0 python/3.12 cuda/13.2
+module load opencv/4.13.0 python/3.12 cuda/13.2
 ```
 
 | Module | Why |
 |--------|-----|
-| `gcc` | Compiler for CUDA extensions |
 | `opencv/4.13.0` | Real `cv2`; required before venv (Alliance OpenCV rule) |
 | `python/3.12` | Matches wheelhouse cp312 wheels |
 | `cuda/13.2` | Must match `torch.version.cuda` (13.2) when building extensions |
@@ -69,7 +68,7 @@ nvcc --version
 ```bash
 cd ~/projects/aip-jelder/bardiaes/HAD
 
-module load gcc opencv/4.13.0 python/3.12 cuda/13.2
+module load opencv/4.13.0 python/3.12 cuda/13.2
 virtualenv --no-download venv --prompt had
 source venv/bin/activate
 ```
@@ -139,7 +138,7 @@ If OpenCV fails with the dummy-wheel message:
 
 ```bash
 deactivate
-module load gcc opencv/4.13.0 python/3.12 cuda/13.2
+module load opencv/4.13.0 python/3.12 cuda/13.2
 source venv/bin/activate
 pip install -r requirements.txt --find-links https://pypi.org/simple/ --prefer-binary
 ```
@@ -202,7 +201,7 @@ If build OOMs or is slow, use an interactive GPU node and run the same command.
 ```bash
 source ~/projects/aip-jelder/bardiaes/killarney-setup/killarney-env.sh
 
-module load gcc opencv/4.13.0 python/3.12 cuda/13.2
+module load opencv/4.13.0 python/3.12 cuda/13.2
 source ~/projects/aip-jelder/bardiaes/HAD/venv/bin/activate
 ```
 
@@ -227,41 +226,51 @@ EOF
 
 ---
 
-## Running HAD (still to adapt)
+## Running HAD
 
-Upstream `run_train_scene.sh` / slurm scripts use conda and `cuda/11.8.0`. Replace with
-the module stack above.
-
-Set paths when launching:
+Set paths when launching (defaults are relative to the **killarney-dev.sh** checkout,
+resolved with `pwd -P` — not `$HOME` or your shell's `$PWD`):
 
 ```bash
-export PROJECT_ROOT=~/projects/aip-jelder/bardiaes/HAD
+cd /project/6106647/bardiaes/HAD    # your allocation path
+source ./killarney-dev.sh           # not ~/projects/... if that resolves to /home
 export LVSM_CKPT_PATH=$PROJECT_ROOT/checkpoints/LVSM_decoder_only_conf_Resi_unet_512
-export DATA_ROOT=/path/to/DL3DV-10K-Benchmark
-export OUTPUT_ROOT=/scratch/$USER/had/outputs
+# DATA_ROOT defaults to $PROJECT_ROOT/data/DL3DV-10K-Benchmark
+# OUTPUT_ROOT defaults to /scratch/$USER/had/outputs when /scratch exists
 ```
 
 Download checkpoint per `README.md`:
 
 - `checkpoints/LVSM_decoder_only_conf_Resi_unet_512/ckpt_0000000000010000.pt`
 
-Example single-scene run:
+### Interactive GPU (one scene)
 
 ```bash
+killarney_gpu_interactive          # login node → compute node
+source killarney-dev.sh            # re-source on compute node
 ./run_train_scene.sh <scene_id> 9 20000
 ```
 
-Slurm jobs need `--account=$AIP_ACCOUNT` and Killarney GPU types (`gpu:l40s:1` or
-`gpu:h100:1`), not `a100`.
+### Slurm job (one scene, no interactive shell)
+
+From the login node after `source ./killarney-dev.sh` from your `/project/.../HAD` checkout:
+
+```bash
+killarney_gpu_sbatch <scene_id> 9 20000
+```
+
+`killarney_gpu_sbatch` submits from `PROJECT_ROOT`, uses `--export=NONE` (no leaked
+`/home` paths from the login shell), and errors if `PROJECT_ROOT`, logs, or data paths
+are under `/home`.
 
 ---
 
 ## Slurm / job checklist
 
-1. `--account=aip-jelder` (or `$AIP_ACCOUNT`)
-2. `--gres=gpu:l40s:1` (or h100)
-3. `--time=...` set realistically
-4. In the job script: `module load gcc opencv/4.13.0 python/3.12 cuda/13.2` then `source venv/bin/activate`
+1. `--account=$AIP_ACCOUNT` (auto-detected from `~/projects/*/` or set manually)
+2. `--gres=gpu:l40s:1` or `gpu:h100:1` (not a100)
+3. `--time=12:00:00` default for `killarney_gpu_sbatch` (`KILLARNEY_SBATCH_TIME`)
+4. Job runs `had_dev` then `run_train_scene.sh`
 5. Run from `~/projects/...`, not `$HOME`
 
 ---
