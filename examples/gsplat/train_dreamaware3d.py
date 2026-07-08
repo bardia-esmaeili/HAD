@@ -642,12 +642,14 @@ class Runner:
                 )
             )
 
+        # num_workers must stay 0: Runner.__init__ loads splats/DiFix/LVSM on CUDA before
+        # this DataLoader is created; forked workers (default in upstream gsplat) deadlock
+        # or stall badly with OpenCV remap in Dataset.__getitem__.
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
             batch_size=cfg.batch_size,
             shuffle=True,
-            num_workers=4,
-            persistent_workers=True,
+            num_workers=0,
             pin_memory=True,
         )
         trainloader_iter = iter(trainloader)
@@ -1439,8 +1441,7 @@ class Runner:
             dataset,
             batch_size=self.cfg.batch_size,
             shuffle=True,
-            num_workers=4,
-            persistent_workers=True,
+            num_workers=0,
             pin_memory=True,
         )
         self.novelloaders.append(dataloader)
@@ -1467,7 +1468,7 @@ class Runner:
         world_size = self.world_size
 
         valloader = torch.utils.data.DataLoader(
-            self.valset, batch_size=1, shuffle=False, num_workers=1
+            self.valset, batch_size=1, shuffle=False, num_workers=0
         )
         ellipse_time = 0
         metrics = defaultdict(list)
