@@ -102,12 +102,27 @@ class Config:
 
     # Number of training steps
     max_steps: int = 20_000
-    # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [1_0000, 2_0000, 3_0000, 4_5000, 6_0000])
+    # Steps to evaluate the model. For each fix step F (until 20_000), include F (eval at
+    # step F-1, before fix) and F+1 (eval at step F, after fix). Eval runs before fix
+    # when both fire on the same iteration.
+    eval_steps: List[int] = field(default_factory=lambda: [
+        1_000, 2_000,
+        3_000, 3_001,
+        6_000, 6_001,
+        8_000, 8_001,
+        10_000, 10_001,
+        12_000, 12_001,
+        14_000, 14_001,
+        16_000, 16_001,
+        18_000, 18_001,
+        20_000, 20_001,
+    ])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [3_0000, 6_0000])
     # Steps to fix the artifacts
     fix_steps: List[int] = field(default_factory=lambda: [3_000, 6_000, 8_000, 10_000, 12_000, 14_000, 16_000, 18_000, 20_000, 22_000, 24_000, 26_000, 28_000, 30_000, 32_000, 34_000, 36_000, 38_000, 40_000, 42_000, 44_000, 46_000, 48_000, 50_000, 52_000, 54_000, 56_000, 58_000])
+    # Keep all renders/novel/{step}/ dirs across fix rounds (default: only the last survives).
+    keep_all_novel_renders: bool = False
 
     num_sparse_view: int = 9
     target_sample_step: int = 2
@@ -1449,7 +1464,7 @@ class Runner:
 
         self.current_novel_poses = novel_poses
 
-        if is_last:
+        if is_last and not self.cfg.keep_all_novel_renders:
             novel_dir = os.path.join(self.render_dir, "novel")
             steps = [d for d in os.listdir(novel_dir) if os.path.isdir(os.path.join(novel_dir, d))]
             steps = sorted([int(s) for s in steps])
