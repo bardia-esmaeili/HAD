@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 
 METRICS = ("psnr", "ssim", "lpips", "ellipse_time", "num_GS")
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -32,44 +34,64 @@ def load_expected(scene_list: Path | None):
     ]
 
 
-def resolve_stats_dir(scene_dir: Path) -> Path | None:
-    direct = scene_dir / "stats"
-    if direct.is_dir():
-        return direct
-
+def list_run_stats_dirs(scene_dir: Path) -> list[Path]:
+    """Return stats dirs under timestamped run subdirectories only."""
     run_stats_dirs = sorted(
         p / "stats"
         for p in scene_dir.iterdir()
         if p.is_dir() and (p / "stats").is_dir()
     )
+    return run_stats_dirs
+
+
+def load_run_cfg(stats_dir: Path) -> dict:
+    cfg_path = stats_dir.parent / "cfg.yml"
+    if not cfg_path.is_file():
+        return {}
+    try:
+        with cfg_path.open() as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else {}
+    except yaml.YAMLError:
+        return {}
+
+
+def resolve_stats_dirs(scene_dir: Path, all_runs: bool) -> list[tuple[str, Path]]:
+    run_stats_dirs = list_run_stats_dirs(scene_dir)
     if not run_stats_dirs:
-        return None
-    return run_stats_dirs[-1]
+        return []
+
+    if all_runs:
+        return [(stats_dir.parent.name, stats_dir) for stats_dir in run_stats_dirs]
+
+    return [(run_stats_dirs[-1].parent.name, run_stats_dirs[-1])]
 
 
-def collect(root: Path, step: str, expected: list[str]):
+def collect(root: Path, step: str, expected: list[str], all_runs: bool):
     rows = []
     for scene_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        stats_dir = resolve_stats_dir(scene_dir)
-        if stats_dir is None:
-            continue
-        if step == "latest":
-            stats_file = latest_val_file(stats_dir)
-        else:
-            stats_file = stats_dir / f"val_step{int(step):04d}.json"
-        if stats_file is None or not stats_file.exists():
-            continue
-        data = json.loads(stats_file.read_text())
-        row = {
-            "scene": scene_dir.name,
-            "run": stats_dir.parent.name if stats_dir.parent != scene_dir else "",
-            "stats_file": str(stats_file),
-        }
-        for metric in METRICS:
-            row[metric] = data.get(metric)
-        rows.append(row)
+        for run_name, stats_dir in resolve_stats_dirs(scene_dir, all_runs):
+            if step == "latest":
+                stats_file = latest_val_file(stats_dir)
+            else:
+                stats_file = stats_dir / f"val_step{int(step):04d}.json"
+            if stats_file is None or not stats_file.exists():
+                continue
+            data = json.loads(stats_file.read_text())
+            cfg = load_run_cfg(stats_dir)
+            row = {
+                "scene": scene_dir.name,
+                "run": run_name,
+                "stats_file": str(stats_file),
+                "uncertainty_mask_threshold": cfg.get("uncertainty_mask_threshold"),
+            }
+            for metric in METRICS:
+                row[metric] = data.get(metric)
+            rows.append(row)
 
-    done = {row["scene"] for row in rows}
+    done = {row["scene"] for row in rows if not all_runs}
+    if all_runs:
+        done = {row["scene"] for row in rows}
     missing = [scene for scene in expected if scene not in done]
     means = {}
     for metric in METRICS:
@@ -83,7 +105,7 @@ def main():
     parser.add_argument(
         "--root",
         default=str(REPO_ROOT / "outputs" / "dreamaware3d_lvsm_view9_fusion3"),
-        help="Method output directory containing scene[/run]/stats/val_step*.json files.",
+        help="Method output directory containing scene/<run>/stats/val_step*.json files.",
     )
     parser.add_argument(
         "--scene-list",
@@ -91,6 +113,11 @@ def main():
         help="Optional expected scene list.",
     )
     parser.add_argument("--step", default="latest", help="'latest' or numeric step, e.g. 19999.")
+    parser.add_argument(
+        "--all-runs",
+        action="store_true",
+        help="Include every timestamped run under each scene (default: latest run only).",
+    )
     parser.add_argument("--save-json", default="", help="Optional path to save summary JSON.")
     parser.add_argument("--save-csv", default="", help="Optional path to save per-scene CSV.")
     args = parser.parse_args()
@@ -98,7 +125,7 @@ def main():
     root = Path(args.root)
     scene_list = Path(args.scene_list) if args.scene_list else None
     expected = load_expected(scene_list) if scene_list and scene_list.exists() else []
-    rows, means, missing = collect(root, args.step, expected)
+    rows, means, missing = collect(root, args.step, expected, args.all_runs)
 
     print(f"root: {root}")
     print(f"done: {len(rows)}")
@@ -116,8 +143,12 @@ def main():
     print("\nper_scene:")
     for row in rows:
         run_suffix = f" run={row['run']}" if row.get("run") else ""
+        threshold = row.get("uncertainty_mask_threshold")
+        threshold_suffix = (
+            f" conf={threshold:.2f}" if isinstance(threshold, (int, float)) else ""
+        )
         print(
-            f"{row['scene']}{run_suffix} "
+            f"{row['scene']}{run_suffix}{threshold_suffix} "
             f"psnr={row['psnr']:.4f} "
             f"ssim={row['ssim']:.4f} "
             f"lpips={row['lpips']:.4f}"
@@ -126,6 +157,7 @@ def main():
     summary = {
         "root": str(root),
         "step": args.step,
+        "all_runs": args.all_runs,
         "done": len(rows),
         "expected": len(expected),
         "missing": missing,
@@ -142,7 +174,14 @@ def main():
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="") as f:
             writer = csv.DictWriter(
-                f, fieldnames=("scene", "run", *METRICS, "stats_file")
+                f,
+                fieldnames=(
+                    "scene",
+                    "run",
+                    "uncertainty_mask_threshold",
+                    *METRICS,
+                    "stats_file",
+                ),
             )
             writer.writeheader()
             writer.writerows(rows)

@@ -12,25 +12,6 @@
 
 set -eo pipefail
 
-had_scene_has_final_stats() {
-  local scene_root="$1"
-  local final_step="$2"
-  local legacy="${scene_root}/stats/val_step${final_step}.json"
-  if [ -s "${legacy}" ]; then
-    return 0
-  fi
-  local match
-  shopt -s nullglob
-  local candidates=("${scene_root}"/*/stats/val_step"${final_step}".json)
-  shopt -u nullglob
-  for match in "${candidates[@]}"; do
-    if [ -s "${match}" ]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 RANK="${1:?usage: sbatch run_had_eval_dataset_shard.sh RANK WORLD_SIZE}"
 WORLD_SIZE="${2:?usage: sbatch run_had_eval_dataset_shard.sh RANK WORLD_SIZE}"
 
@@ -81,8 +62,7 @@ else
   CONF_FLAG="--no-use_conf"
   LVSM_FLAG="--no-use_lvsm"
 fi
-FINAL_STEP="$((MAX_STEPS - 1))"
-FORCE_RERUN="${FORCE_RERUN:-0}"
+UNCERTAINTY_MASK_THRESHOLD="${UNCERTAINTY_MASK_THRESHOLD:-0.9}"
 
 if [ ! -f "${SCENES_FILE}" ]; then
   echo "Missing scene list: ${SCENES_FILE}" >&2
@@ -130,12 +110,6 @@ for IDX in "${!SCENES[@]}"; do
   fi
   SCENE_OUTPUT_ROOT="${OUTPUT_ROOT}/${METHOD_NAME}/${SCENE_ID}"
 
-  if [ "${FORCE_RERUN}" != "1" ] && had_scene_has_final_stats "${SCENE_OUTPUT_ROOT}" "${FINAL_STEP}"; then
-    echo "Skipping completed scene: ${SCENE_ID}"
-    echo "Found completed val_step${FINAL_STEP}.json under ${SCENE_OUTPUT_ROOT}"
-    continue
-  fi
-
   if [ ! -d "${DATA}" ]; then
     echo "Skipping missing data directory: ${DATA}" >&2
     continue
@@ -176,6 +150,7 @@ for IDX in "${!SCENES[@]}"; do
       --target_sample_step "${TARGET_SAMPLE_STEP}" \
       --max_steps "${MAX_STEPS}" \
       --view_fusion "${VIEW_FUSION}" \
+      --uncertainty_mask_threshold "${UNCERTAINTY_MASK_THRESHOLD}" \
       "${SPLIT_ARGS[@]}"; then
     echo "Completed scene: ${SCENE_ID}"
   else

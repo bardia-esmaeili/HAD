@@ -13,30 +13,12 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch/${USER}/had/outputs}"
 LVSM_ROOT="${LVSM_ROOT:-${PROJECT_ROOT}/LVSM}"
 LVSM_CKPT_PATH="${LVSM_CKPT_PATH:-${PROJECT_ROOT}/checkpoints/LVSM_decoder_only_conf_Resi_unet_512}"
 
-had_scene_has_final_stats() {
-  local scene_root="$1"
-  local final_step="$2"
-  local legacy="${scene_root}/stats/val_step${final_step}.json"
-  if [ -s "${legacy}" ]; then
-    return 0
-  fi
-  local match
-  shopt -s nullglob
-  local candidates=("${scene_root}"/*/stats/val_step"${final_step}".json)
-  shopt -u nullglob
-  for match in "${candidates[@]}"; do
-    if [ -s "${match}" ]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 SCENE="${1:?usage: ./run_train_scene.sh SCENE_ID_OR_DATA_DIR [SPARSE_VIEW] [MAX_STEPS]}"
 SPARSE_VIEW="${2:-${SPARSE_VIEW:-9}}"
 USE_LVSM="${USE_LVSM:-1}"
-FORCE_RERUN="${FORCE_RERUN:-0}"
 SPLIT_JSON="${SPLIT_JSON:-}"
+UNCERTAINTY_MASK_THRESHOLD="${UNCERTAINTY_MASK_THRESHOLD:-0.9}"
+RUN_TIMESTAMP="${RUN_TIMESTAMP:-}"
 
 if [ "${DATASET}" = "mipnerf360" ]; then
   DATA_ROOT="${DATA_ROOT:-${MIPNERF_DATA_ROOT:-${HAD_MIPNERF_DATA_ROOT:-}}}"
@@ -83,13 +65,6 @@ else
 fi
 
 SCENE_OUTPUT_ROOT="${OUTPUT_ROOT}/${METHOD_NAME}/${SCENE_ID}"
-FINAL_STEP="$((MAX_STEPS - 1))"
-
-if [ "${FORCE_RERUN}" != "1" ] && had_scene_has_final_stats "${SCENE_OUTPUT_ROOT}" "${FINAL_STEP}"; then
-  echo "Skip completed scene: ${SCENE_ID}"
-  echo "Found completed val_step${FINAL_STEP}.json under ${SCENE_OUTPUT_ROOT}"
-  exit 0
-fi
 
 if [ -z "${DATA_ROOT}" ]; then
   echo "Missing DATA_ROOT (set DATA_ROOT or HAD_DL3DV_DATA_ROOT / HAD_MIPNERF_DATA_ROOT)" >&2
@@ -128,7 +103,10 @@ had_export_pythonpath
 echo "Scene: ${SCENE_ID}"
 echo "Data: ${DATA_DIR}"
 echo "Output root: ${SCENE_OUTPUT_ROOT}"
-echo "DATASET=${DATASET} USE_LVSM=${USE_LVSM} SPARSE_VIEW=${SPARSE_VIEW} VIEW_FUSION=${VIEW_FUSION} MAX_STEPS=${MAX_STEPS}"
+echo "DATASET=${DATASET} USE_LVSM=${USE_LVSM} SPARSE_VIEW=${SPARSE_VIEW} VIEW_FUSION=${VIEW_FUSION} MAX_STEPS=${MAX_STEPS} UNCERTAINTY_MASK_THRESHOLD=${UNCERTAINTY_MASK_THRESHOLD}"
+if [ -n "${RUN_TIMESTAMP}" ]; then
+  echo "RUN_TIMESTAMP=${RUN_TIMESTAMP}"
+fi
 if [ -n "${SPLIT_JSON}" ]; then
   echo "Split json: ${SPLIT_JSON}"
 fi
@@ -150,8 +128,13 @@ TRAIN_ARGS=(
   --target_sample_step "${TARGET_SAMPLE_STEP}"
   --max_steps "${MAX_STEPS}"
   --view_fusion "${VIEW_FUSION}"
+  --uncertainty_mask_threshold "${UNCERTAINTY_MASK_THRESHOLD}"
   "${SPLIT_ARGS[@]}"
 )
+
+if [ -n "${RUN_TIMESTAMP}" ]; then
+  TRAIN_ARGS+=(--run_timestamp "${RUN_TIMESTAMP}")
+fi
 
 if [ "${HAD_DEBUGPY:-0}" = "1" ]; then
   DEBUGPY_PORT="${HAD_DEBUGPY_PORT:-5678}"

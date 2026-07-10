@@ -134,7 +134,16 @@ DATASET=mipnerf360 \
 ./run_had_eval_dataset.sh 9 9 /path/to/hallucination_scoring/checkpoint_dir
 ```
 
-The launcher skips scenes that already have `stats/val_step19999.json`.
+Each training run writes outputs under a timestamped subdirectory:
+
+```text
+OUTPUT_ROOT/<method>/<scene>/<run_timestamp>/
+  cfg.yml
+  stats/val_step*.json
+  ckpts/  renders/  tb/
+```
+
+Re-running the same scene always creates a new run subdirectory; previous runs are kept.
 
 ## Run One Scene
 
@@ -172,6 +181,33 @@ python scripts/summarize_had_eval_results.py \
   --root /path/to/outputs/dreamaware3d_view9_fusion3 \
   --scene-list configs/dl3dv_eval_scenes.txt \
   --step 19999
+```
+
+Use `--all-runs` to include every timestamped run under each scene (e.g. after a threshold sweep).
+
+## Uncertainty Mask Threshold Sweep
+
+```bash
+./run_uncertainty_threshold_sweep.sh <scene_id> 9 20000
+CONF_THRESHOLDS="0.7 0.8 0.9" ./run_uncertainty_threshold_sweep.sh <scene_id> 9 20000
+```
+
+On Killarney:
+
+```bash
+source killarney-dev.sh
+
+# Single job (default threshold 0.9)
+killarney_gpu_sbatch <scene_id> 9 20000 5:00:00
+
+# Threshold sweep — submit all jobs at once (default)
+CONF_THRESHOLDS="0.0 0.2 0.4 0.6 0.8 1.0" killarney_gpu_sbatch <scene_id> 9 20000 5:00:00
+
+# Queue-friendly sweep — one job in Slurm at a time (shell must stay open)
+CONF_THRESHOLDS="0.0 0.2 0.4 0.6 0.8 1.0" CONF_SWEEP_SUBMIT_MODE=sequential killarney_gpu_sbatch <scene_id> 9 20000 5:00:00
+
+# Or use the alias with default grid (0.5 … 0.95)
+killarney_gpu_sbatch_sweep <scene_id> 9 20000 5:00:00
 ```
 
 ## Acknowledgements

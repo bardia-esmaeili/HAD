@@ -201,13 +201,15 @@ Where:
 **Code concept:** masking happens **after** rasterization by zeroing unreliable pixels in both render and target, not inside `rasterize_splats`:
 
 ```python
-threshold = 0.9
 if is_novel_data and uncertainty_masks is not None:
-    colors = colors * (uncertainty_masks > threshold).float()
-    pixels = pixels * (uncertainty_masks > threshold).float()
+    mask = (uncertainty_masks > cfg.uncertainty_mask_threshold).float()
+    colors = colors * mask
+    pixels = pixels * mask
 ```
 
-Mask PNGs are written in `fix()` from merged confidence and loaded via `parser.uncertainty_mask_paths`. Config flags: `use_conf`, `use_lvsm`, `view_fusion`, `num_sparse_view`, `target_sample_step`, `novel_data_lambda`.
+Default `uncertainty_mask_threshold=0.9`; logged in each run's `cfg.yml`. Override via `--uncertainty_mask_threshold` or `UNCERTAINTY_MASK_THRESHOLD` env in launch scripts.
+
+Mask PNGs are written in `fix()` from merged confidence and loaded via `parser.uncertainty_mask_paths`. Config flags: `use_conf`, `use_lvsm`, `view_fusion`, `num_sparse_view`, `target_sample_step`, `novel_data_lambda`, `uncertainty_mask_threshold`.
 
 ### 4.5 Multi-sampling / fusion
 
@@ -254,7 +256,7 @@ Supp. §10.2 / main-paper ablation: hard argmin selection outperforms weighted a
 | Multi-view features `F` | 6-channel target-pose feature map | `multi_feature_adpator` |
 | Score branch `S_theta` | U-Net hallucination / confidence head | `UNetWithConfidence`, `difix3d_conf_decoder`, `difix3D_conf` |
 | `I_3DGS` optional input | Pre-diffusion 3DGS render | `pred_image` in input dict |
-| Hallucination mask `m` | Mask unreliable pixels | `use_conf`, `uncertainty_mask`, threshold **0.9** |
+| Hallucination mask `m` | Mask unreliable pixels | `use_conf`, `uncertainty_mask`, `uncertainty_mask_threshold` (default 0.9) |
 | Multi-sampling `K` | K reference-conditioned DiFix outputs | `view_fusion`, `VIEW_FUSION` |
 | Fusion argmin / argmax | Pick best pixel across K candidates | `merge_by_confidence` → `torch.max` on `difix3D_conf` |
 | Single-phase training | Input + augmented views from early training | `fix_steps`, `novelloaders`, ~70/30 input/novel batch mix |
@@ -304,6 +306,7 @@ use_conf:            whether confidence/hallucination masking is enabled
 use_lvsm:            whether LVSM-based scoring is enabled (vs oracle `use_pefect_conf`)
 lvsm_mode:           alternate LVSM operation mode (image-level ref selection)
 novel_data_lambda:   weight multiplier for novel augmented data (default 0.3)
+uncertainty_mask_threshold: keep novel pixels where confidence > threshold (default 0.9)
 split_json:          sparse-view train/test split file (Mip-NeRF 360 Reconfusion splits)
 input_view_num:      hardcoded 3 — matches Supp. §8 “three nearest input views”
 ```
@@ -401,7 +404,7 @@ The paper uses a hallucination score, where a larger value sounds like “more h
 
 - `difix3D_conf` = Sigmoid output → [0, 1], higher = more reliable.
 - Fusion: `torch.max` over candidate confidence maps.
-- Training mask: keep pixels where confidence **> 0.9**.
+- Training mask: keep pixels where confidence **> uncertainty_mask_threshold** (default 0.9).
 
 ### 10.2 Coordinate conventions
 
@@ -436,7 +439,7 @@ SPLIT_JSON
 |---|---|---|
 | 3DGS iterations | 30k (paper) | 20k (`MAX_STEPS=20000`) |
 | Densification | MCMC comparisons in tables | **MCMC** in all launchers |
-| Confidence threshold | Not always explicit in main text | **0.9** hardcoded in training loop |
+| Confidence threshold | Not always explicit in main text | `uncertainty_mask_threshold` default **0.9** (Config + `cfg.yml`) |
 | Loss weights | λ_input = λ_novel = 1 | input ×1.5, novel ×0.3 |
 | VIEW_FUSION | 3 (DL3DV ablations) | 3 DL3DV, 1 Mip-NeRF 360 |
 

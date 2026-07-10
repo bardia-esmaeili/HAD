@@ -82,9 +82,7 @@ class Config:
     data_factor: int = 4
     # Directory to save results
     result_dir: str = "results/garden"
-    # Append a timestamp subdirectory under result_dir for each run.
-    use_run_timestamp: bool = True
-    # Optional fixed run timestamp (used when use_run_timestamp is True).
+    # Optional fixed run subdirectory name (default: wall-clock timestamp).
     run_timestamp: Optional[str] = None
     # Every N images there is a test image
     test_every: int = 8
@@ -159,6 +157,8 @@ class Config:
     ssim_lambda: float = 0.2
     # Weight for iterative 3d update
     novel_data_lambda: float = 0.3
+    # Keep novel-view pixels where uncertainty_mask > this value (training loss gating).
+    uncertainty_mask_threshold: float = 0.9
 
     # Near plane clipping distance
     near_plane: float = 0.01
@@ -352,12 +352,11 @@ class Runner:
         self.world_size = world_size
         self.device = f"cuda:{local_rank}"
         self.input_view_num = 3
-        # Where to dump results.
-        if cfg.use_run_timestamp:
-            run_ts = cfg.run_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
-            cfg.result_dir = os.path.join(cfg.result_dir, run_ts)
-            if world_rank == 0:
-                print(f"Run output directory: {cfg.result_dir}")
+        # Where to dump results (always under a per-run subdirectory).
+        run_ts = cfg.run_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+        cfg.result_dir = os.path.join(cfg.result_dir, run_ts)
+        if world_rank == 0:
+            print(f"Run output directory: {cfg.result_dir}")
         os.makedirs(cfg.result_dir, exist_ok=True)
 
         # Setup output directories.
@@ -765,10 +764,10 @@ class Runner:
                 colors = colors * (alpha_masks > 0.5).float()
                 pixels = pixels * (alpha_masks > 0.5).float()
 
-            threshold = 0.9
             if is_novel_data and uncertainty_masks is not None:
-                colors = colors * (uncertainty_masks > threshold).float()
-                pixels = pixels * (uncertainty_masks > threshold).float()
+                mask = (uncertainty_masks > cfg.uncertainty_mask_threshold).float()
+                colors = colors * mask
+                pixels = pixels * mask
 
             self.cfg.strategy.step_pre_backward(
                 params=self.splats,
