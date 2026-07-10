@@ -13,6 +13,25 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch/${USER}/had/outputs}"
 LVSM_ROOT="${LVSM_ROOT:-${PROJECT_ROOT}/LVSM}"
 LVSM_CKPT_PATH="${LVSM_CKPT_PATH:-${PROJECT_ROOT}/checkpoints/LVSM_decoder_only_conf_Resi_unet_512}"
 
+had_scene_has_final_stats() {
+  local scene_root="$1"
+  local final_step="$2"
+  local legacy="${scene_root}/stats/val_step${final_step}.json"
+  if [ -s "${legacy}" ]; then
+    return 0
+  fi
+  local match
+  shopt -s nullglob
+  local candidates=("${scene_root}"/*/stats/val_step"${final_step}".json)
+  shopt -u nullglob
+  for match in "${candidates[@]}"; do
+    if [ -s "${match}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 SCENE="${1:?usage: ./run_train_scene.sh SCENE_ID_OR_DATA_DIR [SPARSE_VIEW] [MAX_STEPS]}"
 SPARSE_VIEW="${2:-${SPARSE_VIEW:-9}}"
 USE_LVSM="${USE_LVSM:-1}"
@@ -63,12 +82,12 @@ else
   METHOD_NAME="dreamaware3d_no_lvsm_view${SPARSE_VIEW}"
 fi
 
-OUTPUT_DIR="${OUTPUT_ROOT}/${METHOD_NAME}/${SCENE_ID}"
-FINAL_STATS="${OUTPUT_DIR}/stats/val_step$((MAX_STEPS - 1)).json"
+SCENE_OUTPUT_ROOT="${OUTPUT_ROOT}/${METHOD_NAME}/${SCENE_ID}"
+FINAL_STEP="$((MAX_STEPS - 1))"
 
-if [ "${FORCE_RERUN}" != "1" ] && [ -s "${FINAL_STATS}" ]; then
+if [ "${FORCE_RERUN}" != "1" ] && had_scene_has_final_stats "${SCENE_OUTPUT_ROOT}" "${FINAL_STEP}"; then
   echo "Skip completed scene: ${SCENE_ID}"
-  echo "Found: ${FINAL_STATS}"
+  echo "Found completed val_step${FINAL_STEP}.json under ${SCENE_OUTPUT_ROOT}"
   exit 0
 fi
 
@@ -103,12 +122,12 @@ if [ "${USE_LVSM}" = "1" ] && [ ! -e "${LVSM_CKPT_PATH}" ]; then
 fi
 
 cd "${PROJECT_ROOT}"
-mkdir -p "${OUTPUT_DIR}"
+mkdir -p "${SCENE_OUTPUT_ROOT}"
 had_export_pythonpath
 
 echo "Scene: ${SCENE_ID}"
 echo "Data: ${DATA_DIR}"
-echo "Output: ${OUTPUT_DIR}"
+echo "Output root: ${SCENE_OUTPUT_ROOT}"
 echo "DATASET=${DATASET} USE_LVSM=${USE_LVSM} SPARSE_VIEW=${SPARSE_VIEW} VIEW_FUSION=${VIEW_FUSION} MAX_STEPS=${MAX_STEPS}"
 if [ -n "${SPLIT_JSON}" ]; then
   echo "Split json: ${SPLIT_JSON}"
@@ -119,7 +138,7 @@ TRAIN_ARGS=(
   mcmc
   --data_dir "${DATA_DIR}"
   --data_factor "${DATA_FACTOR}"
-  --result_dir "${OUTPUT_DIR}"
+  --result_dir "${SCENE_OUTPUT_ROOT}"
   --no-use_eval
   --no-use_pefect_conf
   ${CONF_FLAG}

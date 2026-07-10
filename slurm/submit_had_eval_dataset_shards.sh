@@ -60,8 +60,26 @@ for RANK in $(seq 0 "$((WORLD_SIZE - 1))"); do
     fi
 
     SCENE_ID="${SCENES[IDX]}"
-    FINAL_STATS="${OUTPUT_ROOT}/${METHOD_NAME}/${SCENE_ID}/stats/val_step${FINAL_STEP}.json"
-    if [ "${FORCE_RERUN}" = "1" ] || [ ! -s "${FINAL_STATS}" ]; then
+    SCENE_OUTPUT_ROOT="${OUTPUT_ROOT}/${METHOD_NAME}/${SCENE_ID}"
+    LEGACY_STATS="${SCENE_OUTPUT_ROOT}/stats/val_step${FINAL_STEP}.json"
+    if [ "${FORCE_RERUN}" = "1" ]; then
+      PENDING=$((PENDING + 1))
+      continue
+    fi
+    if [ -s "${LEGACY_STATS}" ]; then
+      continue
+    fi
+    shopt -s nullglob
+    MATCHED_STATS=("${SCENE_OUTPUT_ROOT}"/*/stats/val_step"${FINAL_STEP}".json)
+    shopt -u nullglob
+    HAS_COMPLETED=0
+    for stats_file in "${MATCHED_STATS[@]}"; do
+      if [ -s "${stats_file}" ]; then
+        HAS_COMPLETED=1
+        break
+      fi
+    done
+    if [ "${HAS_COMPLETED}" = "0" ]; then
       PENDING=$((PENDING + 1))
     fi
   done

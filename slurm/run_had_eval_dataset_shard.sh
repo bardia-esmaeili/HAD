@@ -12,6 +12,25 @@
 
 set -eo pipefail
 
+had_scene_has_final_stats() {
+  local scene_root="$1"
+  local final_step="$2"
+  local legacy="${scene_root}/stats/val_step${final_step}.json"
+  if [ -s "${legacy}" ]; then
+    return 0
+  fi
+  local match
+  shopt -s nullglob
+  local candidates=("${scene_root}"/*/stats/val_step"${final_step}".json)
+  shopt -u nullglob
+  for match in "${candidates[@]}"; do
+    if [ -s "${match}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 RANK="${1:?usage: sbatch run_had_eval_dataset_shard.sh RANK WORLD_SIZE}"
 WORLD_SIZE="${2:?usage: sbatch run_had_eval_dataset_shard.sh RANK WORLD_SIZE}"
 
@@ -109,12 +128,11 @@ for IDX in "${!SCENES[@]}"; do
     DATA="${DATA_ROOT}/${SCENE_ID}/nerfstudio"
     SCENE_SPLIT_JSON="${SPLIT_JSON}"
   fi
-  OUTPUT_DIR="${OUTPUT_ROOT}/${METHOD_NAME}/${SCENE_ID}"
-  FINAL_STATS="${OUTPUT_DIR}/stats/val_step${FINAL_STEP}.json"
+  SCENE_OUTPUT_ROOT="${OUTPUT_ROOT}/${METHOD_NAME}/${SCENE_ID}"
 
-  if [ "${FORCE_RERUN}" != "1" ] && [ -s "${FINAL_STATS}" ]; then
+  if [ "${FORCE_RERUN}" != "1" ] && had_scene_has_final_stats "${SCENE_OUTPUT_ROOT}" "${FINAL_STEP}"; then
     echo "Skipping completed scene: ${SCENE_ID}"
-    echo "Found: ${FINAL_STATS}"
+    echo "Found completed val_step${FINAL_STEP}.json under ${SCENE_OUTPUT_ROOT}"
     continue
   fi
 
@@ -132,10 +150,10 @@ for IDX in "${!SCENES[@]}"; do
     SPLIT_ARGS=(--split_json "${SCENE_SPLIT_JSON}")
   fi
 
-  mkdir -p "${OUTPUT_DIR}"
+  mkdir -p "${SCENE_OUTPUT_ROOT}"
   echo "Processing scene: ${SCENE_ID} dataset=${DATASET} rank=${RANK}/${WORLD_SIZE} use_lvsm=${USE_LVSM}"
   echo "Data dir: ${DATA}"
-  echo "Output dir: ${OUTPUT_DIR}"
+  echo "Output root: ${SCENE_OUTPUT_ROOT}"
   if [ -n "${SCENE_SPLIT_JSON}" ]; then
     echo "Split json: ${SCENE_SPLIT_JSON}"
   fi
@@ -146,7 +164,7 @@ for IDX in "${!SCENES[@]}"; do
   if python "${PROJECT_ROOT}/examples/gsplat/train_dreamaware3d.py" mcmc \
       --data_dir "${DATA}" \
       --data_factor "${DATA_FACTOR}" \
-      --result_dir "${OUTPUT_DIR}" \
+      --result_dir "${SCENE_OUTPUT_ROOT}" \
       --no-use_eval \
       --no-use_pefect_conf \
       ${CONF_FLAG} \

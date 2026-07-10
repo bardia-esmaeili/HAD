@@ -32,10 +32,27 @@ def load_expected(scene_list: Path | None):
     ]
 
 
+def resolve_stats_dir(scene_dir: Path) -> Path | None:
+    direct = scene_dir / "stats"
+    if direct.is_dir():
+        return direct
+
+    run_stats_dirs = sorted(
+        p / "stats"
+        for p in scene_dir.iterdir()
+        if p.is_dir() and (p / "stats").is_dir()
+    )
+    if not run_stats_dirs:
+        return None
+    return run_stats_dirs[-1]
+
+
 def collect(root: Path, step: str, expected: list[str]):
     rows = []
     for scene_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        stats_dir = scene_dir / "stats"
+        stats_dir = resolve_stats_dir(scene_dir)
+        if stats_dir is None:
+            continue
         if step == "latest":
             stats_file = latest_val_file(stats_dir)
         else:
@@ -43,7 +60,11 @@ def collect(root: Path, step: str, expected: list[str]):
         if stats_file is None or not stats_file.exists():
             continue
         data = json.loads(stats_file.read_text())
-        row = {"scene": scene_dir.name, "stats_file": str(stats_file)}
+        row = {
+            "scene": scene_dir.name,
+            "run": stats_dir.parent.name if stats_dir.parent != scene_dir else "",
+            "stats_file": str(stats_file),
+        }
         for metric in METRICS:
             row[metric] = data.get(metric)
         rows.append(row)
@@ -62,7 +83,7 @@ def main():
     parser.add_argument(
         "--root",
         default=str(REPO_ROOT / "outputs" / "dreamaware3d_lvsm_view9_fusion3"),
-        help="Method output directory containing scene/stats/val_step*.json files.",
+        help="Method output directory containing scene[/run]/stats/val_step*.json files.",
     )
     parser.add_argument(
         "--scene-list",
@@ -94,8 +115,9 @@ def main():
 
     print("\nper_scene:")
     for row in rows:
+        run_suffix = f" run={row['run']}" if row.get("run") else ""
         print(
-            f"{row['scene']} "
+            f"{row['scene']}{run_suffix} "
             f"psnr={row['psnr']:.4f} "
             f"ssim={row['ssim']:.4f} "
             f"lpips={row['lpips']:.4f}"
@@ -119,7 +141,9 @@ def main():
         path = Path(args.save_csv)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=("scene", *METRICS, "stats_file"))
+            writer = csv.DictWriter(
+                f, fieldnames=("scene", "run", *METRICS, "stats_file")
+            )
             writer.writeheader()
             writer.writerows(rows)
         print(f"saved_csv: {path}")

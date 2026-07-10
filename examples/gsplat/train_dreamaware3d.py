@@ -5,6 +5,7 @@ import time
 import shutil
 from dataclasses import dataclass, field
 from collections import defaultdict
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Union
 
 import imageio
@@ -81,6 +82,10 @@ class Config:
     data_factor: int = 4
     # Directory to save results
     result_dir: str = "results/garden"
+    # Append a timestamp subdirectory under result_dir for each run.
+    use_run_timestamp: bool = True
+    # Optional fixed run timestamp (used when use_run_timestamp is True).
+    run_timestamp: Optional[str] = None
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -122,7 +127,7 @@ class Config:
     # Steps to fix the artifacts
     fix_steps: List[int] = field(default_factory=lambda: [3_000, 6_000, 8_000, 10_000, 12_000, 14_000, 16_000, 18_000, 20_000, 22_000, 24_000, 26_000, 28_000, 30_000, 32_000, 34_000, 36_000, 38_000, 40_000, 42_000, 44_000, 46_000, 48_000, 50_000, 52_000, 54_000, 56_000, 58_000])
     # Keep all renders/novel/{step}/ dirs across fix rounds (default: only the last survives).
-    keep_all_novel_renders: bool = False
+    keep_all_novel_renders: bool = True
 
     num_sparse_view: int = 9
     target_sample_step: int = 2
@@ -212,7 +217,7 @@ class Config:
     # Dump information to tensorboard every this steps
     tb_every: int = 100
     # Save training images to tensorboard
-    tb_save_image: bool = False
+    tb_save_image: bool = True
 
     lpips_net: Literal["vgg", "alex"] = "alex"
 
@@ -348,6 +353,11 @@ class Runner:
         self.device = f"cuda:{local_rank}"
         self.input_view_num = 3
         # Where to dump results.
+        if cfg.use_run_timestamp:
+            run_ts = cfg.run_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+            cfg.result_dir = os.path.join(cfg.result_dir, run_ts)
+            if world_rank == 0:
+                print(f"Run output directory: {cfg.result_dir}")
         os.makedirs(cfg.result_dir, exist_ok=True)
 
         # Setup output directories.
@@ -839,7 +849,23 @@ class Runner:
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
-                    self.writer.add_image("train/render", canvas, step)
+                    canvas = np.clip(canvas, 0.0, 1.0)
+                    view_type = "novel" if is_novel_data else "gt"
+                    if "image_index" in data:
+                        view_label = data["image_index"]
+                        if not isinstance(view_label, str):
+                            view_label = "_".join(str(v) for v in view_label)
+                    else:
+                        view_ids = image_ids.detach().cpu().tolist()
+                        if not isinstance(view_ids, list):
+                            view_ids = [view_ids]
+                        view_label = "_".join(str(v) for v in view_ids)
+                    self.writer.add_image(
+                        f"train/render/{view_type}/{view_label}",
+                        canvas,
+                        step,
+                        dataformats="HWC",
+                    )
                 self.writer.flush()
 
             # save checkpoint before updating the model
