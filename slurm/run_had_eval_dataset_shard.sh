@@ -40,12 +40,28 @@ SCENES_FILE="${SCENES_FILE:-${DEFAULT_SCENES_FILE}}"
 SPARSE_VIEW="${SPARSE_VIEW:-9}"
 VIEW_FUSION="${VIEW_FUSION:-${DEFAULT_VIEW_FUSION}}"
 USE_LVSM="${USE_LVSM:-1}"
+USE_ORACLE="${USE_ORACLE:-0}"
 DATA_FACTOR="${DATA_FACTOR:-4}"
 MAX_STEPS="${MAX_STEPS:-${DEFAULT_MAX_STEPS}}"
 TARGET_SAMPLE_STEP="${TARGET_SAMPLE_STEP:-${DEFAULT_TARGET_SAMPLE_STEP}}"
 MIPNERF_SPLIT_ROOT="${MIPNERF_SPLIT_ROOT:-${DATA_ROOT}}"
 SPLIT_JSON="${SPLIT_JSON:-}"
-if [ "${USE_LVSM}" = "1" ]; then
+UNCERTAINTY_MASK_THRESHOLD="${UNCERTAINTY_MASK_THRESHOLD:-0.9}"
+
+if [ "${USE_ORACLE}" = "1" ]; then
+  USE_LVSM=0
+fi
+
+if [ "${USE_ORACLE}" = "1" ]; then
+  if [ "${DATASET}" = "mipnerf360" ]; then
+    METHOD_NAME="dreamaware3d_mipnerf360_oracle_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
+  else
+    METHOD_NAME="dreamaware3d_oracle_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
+  fi
+  CONF_FLAG="--use_conf"
+  LVSM_FLAG="--no-use_lvsm"
+  PERFECT_CONF_FLAG="--use_pefect_conf"
+elif [ "${USE_LVSM}" = "1" ]; then
   if [ "${DATASET}" = "mipnerf360" ]; then
     METHOD_NAME="dreamaware3d_mipnerf360_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
   else
@@ -53,6 +69,7 @@ if [ "${USE_LVSM}" = "1" ]; then
   fi
   CONF_FLAG="--use_conf"
   LVSM_FLAG="--use_lvsm"
+  PERFECT_CONF_FLAG="--no-use_pefect_conf"
 else
   if [ "${DATASET}" = "mipnerf360" ]; then
     METHOD_NAME="dreamaware3d_mipnerf360_no_lvsm_view${SPARSE_VIEW}"
@@ -61,8 +78,8 @@ else
   fi
   CONF_FLAG="--no-use_conf"
   LVSM_FLAG="--no-use_lvsm"
+  PERFECT_CONF_FLAG="--no-use_pefect_conf"
 fi
-UNCERTAINTY_MASK_THRESHOLD="${UNCERTAINTY_MASK_THRESHOLD:-0.9}"
 
 if [ ! -f "${SCENES_FILE}" ]; then
   echo "Missing scene list: ${SCENES_FILE}" >&2
@@ -125,7 +142,7 @@ for IDX in "${!SCENES[@]}"; do
   fi
 
   mkdir -p "${SCENE_OUTPUT_ROOT}"
-  echo "Processing scene: ${SCENE_ID} dataset=${DATASET} rank=${RANK}/${WORLD_SIZE} use_lvsm=${USE_LVSM}"
+  echo "Processing scene: ${SCENE_ID} dataset=${DATASET} rank=${RANK}/${WORLD_SIZE} use_lvsm=${USE_LVSM} use_oracle=${USE_ORACLE}"
   echo "Data dir: ${DATA}"
   echo "Output root: ${SCENE_OUTPUT_ROOT}"
   if [ -n "${SCENE_SPLIT_JSON}" ]; then
@@ -140,7 +157,7 @@ for IDX in "${!SCENES[@]}"; do
       --data_factor "${DATA_FACTOR}" \
       --result_dir "${SCENE_OUTPUT_ROOT}" \
       --no-use_eval \
-      --no-use_pefect_conf \
+      ${PERFECT_CONF_FLAG} \
       ${CONF_FLAG} \
       --no-partial_setting \
       ${LVSM_FLAG} \

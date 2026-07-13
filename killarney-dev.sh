@@ -17,6 +17,10 @@
 # Single run with a custom threshold (output dir still uses auto timestamp):
 #   UNCERTAINTY_MASK_THRESHOLD=0.7 killarney_gpu_sbatch <scene_id> 9 20000
 #
+# Oracle GT confidence (DiFix + view_fusion, no LVSM scorer):
+#   USE_ORACLE=1 killarney_gpu_sbatch <scene_id> 9 20000
+#   USE_ORACLE=1 ./run_train_scene.sh <scene> 9 20000
+#
 # Override paths before sourcing, or edit the defaults below:
 #   export DATA_ROOT=/project/.../DL3DV-10K-Benchmark
 #   export OUTPUT_ROOT=/scratch/$USER/had/outputs
@@ -188,7 +192,7 @@ _killarney_gpu_sbatch_submit_one() {
       --job-name="${job_name}" \
       --output="${log_dir}/${job_name}-%j.out" \
       --error="${log_dir}/${job_name}-%j.err" \
-      --export=NONE,PYTHONUNBUFFERED=1,DATASET="${DATASET:-dl3dv}",DATA_ROOT="${DATA_ROOT}",OUTPUT_ROOT="${OUTPUT_ROOT}",LVSM_CKPT_PATH="${LVSM_CKPT_PATH}",SPARSE_VIEW="${sparse_view}",MAX_STEPS="${max_steps}",UNCERTAINTY_MASK_THRESHOLD="${threshold}",RUN_TIMESTAMP="" \
+      --export=NONE,PYTHONUNBUFFERED=1,DATASET="${DATASET:-dl3dv}",DATA_ROOT="${DATA_ROOT}",OUTPUT_ROOT="${OUTPUT_ROOT}",LVSM_CKPT_PATH="${LVSM_CKPT_PATH}",SPARSE_VIEW="${sparse_view}",MAX_STEPS="${max_steps}",VIEW_FUSION="${VIEW_FUSION:-}",USE_LVSM="${USE_LVSM:-1}",USE_ORACLE="${USE_ORACLE:-0}",UNCERTAINTY_MASK_THRESHOLD="${threshold}",RUN_TIMESTAMP="" \
       --wrap "bash -lc $(printf '%q' "${job_cmd}")"
   )"
   echo "killarney_gpu_sbatch: submitted job_id=${job_id}" >&2

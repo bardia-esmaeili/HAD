@@ -16,9 +16,14 @@ LVSM_CKPT_PATH="${LVSM_CKPT_PATH:-${PROJECT_ROOT}/checkpoints/LVSM_decoder_only_
 SCENE="${1:?usage: ./run_train_scene.sh SCENE_ID_OR_DATA_DIR [SPARSE_VIEW] [MAX_STEPS]}"
 SPARSE_VIEW="${2:-${SPARSE_VIEW:-9}}"
 USE_LVSM="${USE_LVSM:-1}"
+USE_ORACLE="${USE_ORACLE:-0}"
 SPLIT_JSON="${SPLIT_JSON:-}"
 UNCERTAINTY_MASK_THRESHOLD="${UNCERTAINTY_MASK_THRESHOLD:-0.9}"
 RUN_TIMESTAMP="${RUN_TIMESTAMP:-}"
+
+if [ "${USE_ORACLE}" = "1" ]; then
+  USE_LVSM=0
+fi
 
 if [ "${DATASET}" = "mipnerf360" ]; then
   DATA_ROOT="${DATA_ROOT:-${MIPNERF_DATA_ROOT:-${HAD_MIPNERF_DATA_ROOT:-}}}"
@@ -47,14 +52,27 @@ else
   DATA_DIR="${DATA_ROOT}/${SCENE_ID}/nerfstudio"
 fi
 
-if [ "${USE_LVSM}" = "1" ]; then
+if [ "${USE_ORACLE}" = "1" ]; then
   CONF_FLAG="--use_conf"
+  LVSM_FLAG="--no-use_lvsm"
+  PERFECT_CONF_FLAG="--use_pefect_conf"
+elif [ "${USE_LVSM}" = "1" ]; then
+  CONF_FLAG="--use_conf"
+  LVSM_FLAG="--use_lvsm"
+  PERFECT_CONF_FLAG="--no-use_pefect_conf"
 else
   CONF_FLAG="--no-use_conf"
+  LVSM_FLAG="--no-use_lvsm"
+  PERFECT_CONF_FLAG="--no-use_pefect_conf"
 fi
-LVSM_FLAG="--use_lvsm"
 
-if [ "${DATASET}" = "mipnerf360" ] && [ "${USE_LVSM}" = "1" ]; then
+if [ "${USE_ORACLE}" = "1" ]; then
+  if [ "${DATASET}" = "mipnerf360" ]; then
+    METHOD_NAME="dreamaware3d_mipnerf360_oracle_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
+  else
+    METHOD_NAME="dreamaware3d_oracle_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
+  fi
+elif [ "${DATASET}" = "mipnerf360" ] && [ "${USE_LVSM}" = "1" ]; then
   METHOD_NAME="dreamaware3d_mipnerf360_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
 elif [ "${DATASET}" = "mipnerf360" ]; then
   METHOD_NAME="dreamaware3d_mipnerf360_no_lvsm_view${SPARSE_VIEW}"
@@ -103,7 +121,7 @@ had_export_pythonpath
 echo "Scene: ${SCENE_ID}"
 echo "Data: ${DATA_DIR}"
 echo "Output root: ${SCENE_OUTPUT_ROOT}"
-echo "DATASET=${DATASET} USE_LVSM=${USE_LVSM} SPARSE_VIEW=${SPARSE_VIEW} VIEW_FUSION=${VIEW_FUSION} MAX_STEPS=${MAX_STEPS} UNCERTAINTY_MASK_THRESHOLD=${UNCERTAINTY_MASK_THRESHOLD}"
+echo "DATASET=${DATASET} USE_LVSM=${USE_LVSM} USE_ORACLE=${USE_ORACLE} SPARSE_VIEW=${SPARSE_VIEW} VIEW_FUSION=${VIEW_FUSION} MAX_STEPS=${MAX_STEPS} UNCERTAINTY_MASK_THRESHOLD=${UNCERTAINTY_MASK_THRESHOLD}"
 if [ -n "${RUN_TIMESTAMP}" ]; then
   echo "RUN_TIMESTAMP=${RUN_TIMESTAMP}"
 fi
@@ -118,7 +136,7 @@ TRAIN_ARGS=(
   --data_factor "${DATA_FACTOR}"
   --result_dir "${SCENE_OUTPUT_ROOT}"
   --no-use_eval
-  --no-use_pefect_conf
+  ${PERFECT_CONF_FLAG}
   ${CONF_FLAG}
   --no-partial_setting
   ${LVSM_FLAG}

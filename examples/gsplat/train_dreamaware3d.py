@@ -550,22 +550,24 @@ class Runner:
         self.difix.set_progress_bar_config(disable=True)
         self.difix.to("cuda")
 
-        # config = OmegaConf.load(os.path.join(LVSM_ROOT, "configs/LVSM_scene_decoder_only_SSIM.yaml"))
-        config = OmegaConf.load(os.path.join(LVSM_ROOT, "configs/LVSM_scene_decoder_only_conf_512.yaml"))
-        config = edict(config)
-        lvsm_ckpt_path = os.environ.get("LVSM_CKPT_PATH") or os.environ.get("LVSM_CKPT_DIR")
-        if lvsm_ckpt_path:
-            if not os.path.isabs(lvsm_ckpt_path):
-                lvsm_ckpt_path = os.path.abspath(lvsm_ckpt_path)
-            config.training.checkpoint_dir = lvsm_ckpt_path
-        elif not os.path.isabs(config.training.checkpoint_dir):
-            config.training.checkpoint_dir = os.path.join(LVSM_ROOT, config.training.checkpoint_dir)
+        self.model_lvsm = None
+        if cfg.use_lvsm:
+            # config = OmegaConf.load(os.path.join(LVSM_ROOT, "configs/LVSM_scene_decoder_only_SSIM.yaml"))
+            config = OmegaConf.load(os.path.join(LVSM_ROOT, "configs/LVSM_scene_decoder_only_conf_512.yaml"))
+            config = edict(config)
+            lvsm_ckpt_path = os.environ.get("LVSM_CKPT_PATH") or os.environ.get("LVSM_CKPT_DIR")
+            if lvsm_ckpt_path:
+                if not os.path.isabs(lvsm_ckpt_path):
+                    lvsm_ckpt_path = os.path.abspath(lvsm_ckpt_path)
+                config.training.checkpoint_dir = lvsm_ckpt_path
+            elif not os.path.isabs(config.training.checkpoint_dir):
+                config.training.checkpoint_dir = os.path.join(LVSM_ROOT, config.training.checkpoint_dir)
 
-        module, class_name = config.model.class_name.rsplit(".", 1)
-        module = f"LVSM.{module}"
-        LVSM = importlib.import_module(module).__dict__[class_name]
-        self.model_lvsm = LVSM(config).to(self.device)
-        self.model_lvsm.load_ckpt(config.training.checkpoint_dir)
+            module, class_name = config.model.class_name.rsplit(".", 1)
+            module = f"LVSM.{module}"
+            LVSM = importlib.import_module(module).__dict__[class_name]
+            self.model_lvsm = LVSM(config).to(self.device)
+            self.model_lvsm.load_ckpt(config.training.checkpoint_dir)
 
 
     def rasterize_splats(
@@ -1436,28 +1438,50 @@ class Runner:
                     
 
             elif use_pefect_conf:
-                output_image = \
-                    self.difix(prompt="remove degradation", image=image, ref_image=ref_image, num_inference_steps=1,
-                            timesteps=[199], guidance_scale=0.0).images[0]
+                # Oracle confidence: same DiFix × view_fusion path as LVSM, but score with
+                # 1 - mean_channel(L1(difix, GT)) ∈ [0, 1] (matches LVSM training target).
+                # Note: with multiple fix_steps, novel poses are shift_poses toward targets
+                # while GT is the final target frame (same as the LVSM path).
+                ref_indices = top_N_ref_index[i]
+                output_images = []
+                for ref_idx in ref_indices[: self.cfg.view_fusion]:
+                    ref_image = Image.open(self.parser.image_paths[ref_idx]).convert("RGB").resize(
+                        image.size, Image.Resampling.LANCZOS
+                    )
+                    output_image = self.difix(
+                        prompt="remove degradation",
+                        image=image,
+                        ref_image=ref_image,
+                        num_inference_steps=1,
+                        timesteps=[199],
+                        guidance_scale=0.0,
+                    ).images[0]
+                    output_image = output_image.resize(image.size, Image.LANCZOS)
+                    output_images.append(transforms.ToTensor()(output_image))
 
-                output_image = output_image.resize(gt_image.size, Image.LANCZOS)      
-                img_np = np.array(output_image)
-                gt_np = np.array(gt_image) 
-                # Convert to torch tensors and reshape to [B, C, H, W]
-                img_tensor = torch.from_numpy(img_np).float().permute(2, 0, 1).unsqueeze(0) / 255.0
-                gt_tensor = torch.from_numpy(gt_np).float().permute(2, 0, 1).unsqueeze(0) / 255.0
+                difix_batch = torch.stack(output_images, dim=0).to(self.device)  # [K, 3, H, W]
+                gt_tensor = transforms.ToTensor()(gt_image).to(self.device).unsqueeze(0).expand(
+                    difix_batch.shape[0], -1, -1, -1
+                )
+                # Reliability map in [0, 1]; higher = closer to GT (same polarity as difix3D_conf).
+                confs = 1.0 - F.l1_loss(difix_batch, gt_tensor, reduction="none").mean(dim=1, keepdim=True)
 
-                # If using GPU
-                img_tensor = img_tensor.cuda()
-                gt_tensor = gt_tensor.cuda()
+                merged_difix3D_image, merged_conf = self.merge_by_confidence(
+                    output_images, confs.cpu()
+                )
 
-                # Now compute pixel-wise loss
-                pixel_wise_loss = 1.0 - F.l1_loss(img_tensor, gt_tensor, reduction='none')
-                pixel_wise_loss = pixel_wise_loss.mean(dim=1, keepdim=True)
-                diff_image = pixel_wise_loss.squeeze().detach().cpu().numpy()
+                output_image = merged_difix3D_image.squeeze()
+                output_image = output_image.cpu().permute(1, 2, 0).numpy()
+                output_image = Image.fromarray((output_image * 255).astype(np.uint8))
 
+                os.makedirs(f"{self.render_dir}/novel/{step}/Fixed", exist_ok=True)
+                output_image.save(f"{self.render_dir}/novel/{step}/Fixed/{i:04d}.png")
+
+                conf = merged_conf.squeeze().cpu().numpy()
                 os.makedirs(f"{self.render_dir}/novel/{step}/Mask", exist_ok=True)
-                Image.fromarray((diff_image * 255).astype(np.uint8), mode='L').save(f"{self.render_dir}/novel/{step}/Mask/{i:04d}.png")
+                Image.fromarray((conf * 255).astype(np.uint8), mode="L").save(
+                    f"{self.render_dir}/novel/{step}/Mask/{i:04d}.png"
+                )
             else:
                 output_image = self.difix(prompt="remove degradation", image=image, ref_image=ref_image, num_inference_steps=1, timesteps=[199], guidance_scale=0.0).images[0]
                 output_image = output_image.resize(image.size, Image.LANCZOS)
