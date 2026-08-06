@@ -192,12 +192,32 @@ Use `--all-runs` to include every timestamped run under each scene (e.g. after a
 CONF_THRESHOLDS="0.7 0.8 0.9" ./run_uncertainty_threshold_sweep.sh <scene_id> 9 20000
 ```
 
+## Sigmoid Temperature Sweep
+
+Soft-threshold gating: `sigmoid((conf - threshold) / T)` with `UNCERTAINTY_MASK_MODE=sigmoid`.
+
+Confidence source is independent of gating mode — use LVSM (default), oracle GT, or DiFix input–output delta:
+
+```bash
+./run_uncertainty_temperature_sweep.sh <scene_id> 9 20000
+CONF_TEMPERATURES="0.05 0.1 0.2" ./run_uncertainty_temperature_sweep.sh <scene_id> 9 20000
+USE_ORACLE=1 ./run_uncertainty_temperature_sweep.sh <scene_id> 9 20000
+USE_DIFIX_DELTA=1 ./run_uncertainty_temperature_sweep.sh <scene_id> 9 20000
+```
+
+Or without a sweep:
+
+```bash
+USE_DIFIX_DELTA=1 ./run_train_scene.sh <scene_id> 9 20000
+USE_DIFIX_DELTA=1 UNCERTAINTY_MASK_MODE=sigmoid UNCERTAINTY_MASK_TEMPERATURE=0.1 ./run_train_scene.sh <scene_id> 9 20000
+```
+
 On Killarney:
 
 ```bash
 source killarney-dev.sh
 
-# Single job (default threshold 0.9)
+# Single job (default threshold 0.9, binary mode)
 killarney_gpu_sbatch <scene_id> 9 20000 5:00:00
 
 # Threshold sweep — submit all jobs at once (default)
@@ -208,6 +228,10 @@ CONF_THRESHOLDS="0.0 0.2 0.4 0.6 0.8 1.0" CONF_SWEEP_SUBMIT_MODE=sequential kill
 
 # Or use the alias with default grid (0.5 … 0.95)
 killarney_gpu_sbatch_sweep <scene_id> 9 20000 5:00:00
+
+# Sigmoid temperature sweep (forces mode=sigmoid; default T grid 0.05 0.1 0.2)
+CONF_TEMPERATURES="0.05 0.1 0.2" killarney_gpu_sbatch <scene_id> 9 20000 5:00:00
+killarney_gpu_sbatch_temp_sweep <scene_id> 9 20000 5:00:00
 ```
 
 ## Acknowledgements

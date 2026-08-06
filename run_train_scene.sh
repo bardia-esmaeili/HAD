@@ -17,12 +17,20 @@ SCENE="${1:?usage: ./run_train_scene.sh SCENE_ID_OR_DATA_DIR [SPARSE_VIEW] [MAX_
 SPARSE_VIEW="${2:-${SPARSE_VIEW:-9}}"
 USE_LVSM="${USE_LVSM:-1}"
 USE_ORACLE="${USE_ORACLE:-0}"
+USE_DIFIX_DELTA="${USE_DIFIX_DELTA:-0}"
 SPLIT_JSON="${SPLIT_JSON:-}"
 UNCERTAINTY_MASK_THRESHOLD="${UNCERTAINTY_MASK_THRESHOLD:-0.9}"
+UNCERTAINTY_MASK_MODE="${UNCERTAINTY_MASK_MODE:-binary}"
+UNCERTAINTY_MASK_TEMPERATURE="${UNCERTAINTY_MASK_TEMPERATURE:-1.0}"
 RUN_TIMESTAMP="${RUN_TIMESTAMP:-}"
 
+# Confidence source: mutually exclusive. Gating (MODE/THRESHOLD/TEMPERATURE) is orthogonal.
 if [ "${USE_ORACLE}" = "1" ]; then
   USE_LVSM=0
+  USE_DIFIX_DELTA=0
+elif [ "${USE_DIFIX_DELTA}" = "1" ]; then
+  USE_LVSM=0
+  USE_ORACLE=0
 fi
 
 if [ "${DATASET}" = "mipnerf360" ]; then
@@ -56,14 +64,22 @@ if [ "${USE_ORACLE}" = "1" ]; then
   CONF_FLAG="--use_conf"
   LVSM_FLAG="--no-use_lvsm"
   PERFECT_CONF_FLAG="--use_pefect_conf"
+  DIFIX_DELTA_FLAG="--no-use_difix_delta_conf"
+elif [ "${USE_DIFIX_DELTA}" = "1" ]; then
+  CONF_FLAG="--use_conf"
+  LVSM_FLAG="--no-use_lvsm"
+  PERFECT_CONF_FLAG="--no-use_pefect_conf"
+  DIFIX_DELTA_FLAG="--use_difix_delta_conf"
 elif [ "${USE_LVSM}" = "1" ]; then
   CONF_FLAG="--use_conf"
   LVSM_FLAG="--use_lvsm"
   PERFECT_CONF_FLAG="--no-use_pefect_conf"
+  DIFIX_DELTA_FLAG="--no-use_difix_delta_conf"
 else
   CONF_FLAG="--no-use_conf"
   LVSM_FLAG="--no-use_lvsm"
   PERFECT_CONF_FLAG="--no-use_pefect_conf"
+  DIFIX_DELTA_FLAG="--no-use_difix_delta_conf"
 fi
 
 if [ "${USE_ORACLE}" = "1" ]; then
@@ -71,6 +87,12 @@ if [ "${USE_ORACLE}" = "1" ]; then
     METHOD_NAME="dreamaware3d_mipnerf360_oracle_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
   else
     METHOD_NAME="dreamaware3d_oracle_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
+  fi
+elif [ "${USE_DIFIX_DELTA}" = "1" ]; then
+  if [ "${DATASET}" = "mipnerf360" ]; then
+    METHOD_NAME="dreamaware3d_mipnerf360_difix_delta_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
+  else
+    METHOD_NAME="dreamaware3d_difix_delta_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
   fi
 elif [ "${DATASET}" = "mipnerf360" ] && [ "${USE_LVSM}" = "1" ]; then
   METHOD_NAME="dreamaware3d_mipnerf360_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
@@ -121,7 +143,7 @@ had_export_pythonpath
 echo "Scene: ${SCENE_ID}"
 echo "Data: ${DATA_DIR}"
 echo "Output root: ${SCENE_OUTPUT_ROOT}"
-echo "DATASET=${DATASET} USE_LVSM=${USE_LVSM} USE_ORACLE=${USE_ORACLE} SPARSE_VIEW=${SPARSE_VIEW} VIEW_FUSION=${VIEW_FUSION} MAX_STEPS=${MAX_STEPS} UNCERTAINTY_MASK_THRESHOLD=${UNCERTAINTY_MASK_THRESHOLD}"
+echo "DATASET=${DATASET} USE_LVSM=${USE_LVSM} USE_ORACLE=${USE_ORACLE} USE_DIFIX_DELTA=${USE_DIFIX_DELTA} SPARSE_VIEW=${SPARSE_VIEW} VIEW_FUSION=${VIEW_FUSION} MAX_STEPS=${MAX_STEPS} UNCERTAINTY_MASK_MODE=${UNCERTAINTY_MASK_MODE} UNCERTAINTY_MASK_THRESHOLD=${UNCERTAINTY_MASK_THRESHOLD} UNCERTAINTY_MASK_TEMPERATURE=${UNCERTAINTY_MASK_TEMPERATURE}"
 if [ -n "${RUN_TIMESTAMP}" ]; then
   echo "RUN_TIMESTAMP=${RUN_TIMESTAMP}"
 fi
@@ -140,13 +162,16 @@ TRAIN_ARGS=(
   ${CONF_FLAG}
   --no-partial_setting
   ${LVSM_FLAG}
+  ${DIFIX_DELTA_FLAG}
   --no-lvsm_mode
   --no-normalize-world-space
   --num_sparse_view "${SPARSE_VIEW}"
   --target_sample_step "${TARGET_SAMPLE_STEP}"
   --max_steps "${MAX_STEPS}"
   --view_fusion "${VIEW_FUSION}"
+  --uncertainty_mask_mode "${UNCERTAINTY_MASK_MODE}"
   --uncertainty_mask_threshold "${UNCERTAINTY_MASK_THRESHOLD}"
+  --uncertainty_mask_temperature "${UNCERTAINTY_MASK_TEMPERATURE}"
   "${SPLIT_ARGS[@]}"
 )
 

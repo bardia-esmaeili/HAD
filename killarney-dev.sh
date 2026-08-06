@@ -14,12 +14,21 @@
 # Queue-friendly sweep (one job in Slurm at a time; shell must stay open):
 #   CONF_THRESHOLDS="0.0 0.2 0.4 0.6 0.8 1.0" CONF_SWEEP_SUBMIT_MODE=sequential killarney_gpu_sbatch <scene_id> 9 20000 5:00:00
 #
+# Sigmoid temperature sweep (forces UNCERTAINTY_MASK_MODE=sigmoid; one job per T):
+#   CONF_TEMPERATURES="0.05 0.1 0.2" killarney_gpu_sbatch <scene_id> 9 20000 5:00:00
+#   Or: killarney_gpu_sbatch_temp_sweep <scene_id> 9 20000 5:00:00
+#
 # Single run with a custom threshold (output dir still uses auto timestamp):
 #   UNCERTAINTY_MASK_THRESHOLD=0.7 killarney_gpu_sbatch <scene_id> 9 20000
 #
 # Oracle GT confidence (DiFix + view_fusion, no LVSM scorer):
 #   USE_ORACLE=1 killarney_gpu_sbatch <scene_id> 9 20000
 #   USE_ORACLE=1 ./run_train_scene.sh <scene> 9 20000
+#
+# DiFix input-output delta confidence (1 - L1(render, difix); no LVSM/GT):
+#   USE_DIFIX_DELTA=1 killarney_gpu_sbatch <scene_id> 9 20000
+#   USE_DIFIX_DELTA=1 ./run_train_scene.sh <scene> 9 20000
+#   USE_DIFIX_DELTA=1 CONF_TEMPERATURES="0.05 0.1 0.2" killarney_gpu_sbatch_temp_sweep <scene_id>
 #
 # Override paths before sourcing, or edit the defaults below:
 #   export DATA_ROOT=/project/.../DL3DV-10K-Benchmark
@@ -154,7 +163,9 @@ _had_wait_for_slurm_job() {
   fi
 }
 
-# Submit one sbatch job (internal). Optional 5th arg: uncertainty_mask_threshold.
+# Submit one sbatch job (internal).
+# Optional 5th arg: uncertainty_mask_threshold.
+# Optional 6th arg: uncertainty_mask_temperature.
 # Prints the numeric job ID on stdout; status messages go to stderr.
 _killarney_gpu_sbatch_submit_one() {
   local scene="$1"
@@ -162,6 +173,8 @@ _killarney_gpu_sbatch_submit_one() {
   local max_steps="$3"
   local timelimit="$4"
   local threshold="${5:-${UNCERTAINTY_MASK_THRESHOLD:-0.9}}"
+  local temperature="${6:-${UNCERTAINTY_MASK_TEMPERATURE:-1.0}}"
+  local mode="${UNCERTAINTY_MASK_MODE:-binary}"
 
   local gres="${HAD_SBATCH_GRES}"
   local mem="${HAD_SBATCH_MEM}"
@@ -173,11 +186,14 @@ _killarney_gpu_sbatch_submit_one() {
   if [[ "${threshold}" != "0.9" ]]; then
     job_name="${job_name}-t${threshold}"
   fi
+  if [[ "${mode}" == "sigmoid" ]]; then
+    job_name="${job_name}-sigT${temperature}"
+  fi
 
-  local job_cmd="export HAD_SKIP_AUTO_ACTIVATE=1 PYTHONUNBUFFERED=1 UNCERTAINTY_MASK_THRESHOLD=${threshold} RUN_TIMESTAMP=; source \"${PROJECT_ROOT}/killarney-dev.sh\" && had_dev && \"${PROJECT_ROOT}/run_train_scene.sh\" \"${scene}\" \"${sparse_view}\" \"${max_steps}\""
+  local job_cmd="export HAD_SKIP_AUTO_ACTIVATE=1 PYTHONUNBUFFERED=1 UNCERTAINTY_MASK_THRESHOLD=${threshold} UNCERTAINTY_MASK_MODE=${mode} UNCERTAINTY_MASK_TEMPERATURE=${temperature} RUN_TIMESTAMP=; source \"${PROJECT_ROOT}/killarney-dev.sh\" && had_dev && \"${PROJECT_ROOT}/run_train_scene.sh\" \"${scene}\" \"${sparse_view}\" \"${max_steps}\""
 
   mkdir -p "${log_dir}"
-  echo "killarney_gpu_sbatch: scene=${scene} SPARSE_VIEW=${sparse_view} MAX_STEPS=${max_steps} UNCERTAINTY_MASK_THRESHOLD=${threshold} --time=${timelimit}" >&2
+  echo "killarney_gpu_sbatch: scene=${scene} SPARSE_VIEW=${sparse_view} MAX_STEPS=${max_steps} UNCERTAINTY_MASK_MODE=${mode} UNCERTAINTY_MASK_THRESHOLD=${threshold} UNCERTAINTY_MASK_TEMPERATURE=${temperature} --time=${timelimit}" >&2
 
   local job_id
   job_id="$(
@@ -192,7 +208,7 @@ _killarney_gpu_sbatch_submit_one() {
       --job-name="${job_name}" \
       --output="${log_dir}/${job_name}-%j.out" \
       --error="${log_dir}/${job_name}-%j.err" \
-      --export=NONE,PYTHONUNBUFFERED=1,DATASET="${DATASET:-dl3dv}",DATA_ROOT="${DATA_ROOT}",OUTPUT_ROOT="${OUTPUT_ROOT}",LVSM_CKPT_PATH="${LVSM_CKPT_PATH}",SPARSE_VIEW="${sparse_view}",MAX_STEPS="${max_steps}",VIEW_FUSION="${VIEW_FUSION:-}",USE_LVSM="${USE_LVSM:-1}",USE_ORACLE="${USE_ORACLE:-0}",UNCERTAINTY_MASK_THRESHOLD="${threshold}",RUN_TIMESTAMP="" \
+      --export=NONE,PYTHONUNBUFFERED=1,DATASET="${DATASET:-dl3dv}",DATA_ROOT="${DATA_ROOT}",OUTPUT_ROOT="${OUTPUT_ROOT}",LVSM_CKPT_PATH="${LVSM_CKPT_PATH}",SPARSE_VIEW="${sparse_view}",MAX_STEPS="${max_steps}",VIEW_FUSION="${VIEW_FUSION:-}",USE_LVSM="${USE_LVSM:-1}",USE_ORACLE="${USE_ORACLE:-0}",USE_DIFIX_DELTA="${USE_DIFIX_DELTA:-0}",UNCERTAINTY_MASK_THRESHOLD="${threshold}",UNCERTAINTY_MASK_MODE="${mode}",UNCERTAINTY_MASK_TEMPERATURE="${temperature}",RUN_TIMESTAMP="" \
       --wrap "bash -lc $(printf '%q' "${job_cmd}")"
   )"
   echo "killarney_gpu_sbatch: submitted job_id=${job_id}" >&2
@@ -202,7 +218,8 @@ _killarney_gpu_sbatch_submit_one() {
 # Submit run_train_scene.sh via sbatch (login node). Same paths/account as interactive.
 # Usage: killarney_gpu_sbatch <scene_id> [sparse_view] [max_steps] [time_limit]
 # Set CONF_THRESHOLDS to submit one job per threshold; otherwise a single job is submitted.
-# CONF_SWEEP_SUBMIT_MODE=parallel (default) submits all thresholds at once;
+# Set CONF_TEMPERATURES to submit one sigmoid-mode job per temperature (do not set both).
+# CONF_SWEEP_SUBMIT_MODE=parallel (default) submits all sweep jobs at once;
 # CONF_SWEEP_SUBMIT_MODE=sequential waits for each job to finish before submitting the next.
 killarney_gpu_sbatch() {
   local scene="${1:?killarney_gpu_sbatch: scene_id required}"
@@ -222,19 +239,46 @@ killarney_gpu_sbatch() {
 
   echo "killarney_gpu_sbatch: PROJECT_ROOT=${PROJECT_ROOT}" >&2
 
+  if [[ -n "${CONF_THRESHOLDS:-}" && -n "${CONF_TEMPERATURES:-}" ]]; then
+    echo "killarney_gpu_sbatch: set only one of CONF_THRESHOLDS or CONF_TEMPERATURES" >&2
+    return 1
+  fi
+
+  local job_id sweep_mode
+  sweep_mode="${CONF_SWEEP_SUBMIT_MODE:-parallel}"
+  if [[ "${sweep_mode}" != "parallel" && "${sweep_mode}" != "sequential" ]]; then
+    echo "killarney_gpu_sbatch: CONF_SWEEP_SUBMIT_MODE must be parallel or sequential (got ${sweep_mode})" >&2
+    return 1
+  fi
+
   if [[ -n "${CONF_THRESHOLDS:-}" ]]; then
-    local threshold job_id sweep_mode
-    sweep_mode="${CONF_SWEEP_SUBMIT_MODE:-parallel}"
-    if [[ "${sweep_mode}" != "parallel" && "${sweep_mode}" != "sequential" ]]; then
-      echo "killarney_gpu_sbatch: CONF_SWEEP_SUBMIT_MODE must be parallel or sequential (got ${sweep_mode})" >&2
-      return 1
-    fi
+    local threshold
     echo "killarney_gpu_sbatch: sweep CONF_THRESHOLDS=${CONF_THRESHOLDS} CONF_SWEEP_SUBMIT_MODE=${sweep_mode}" >&2
     if [[ "${sweep_mode}" == "sequential" ]]; then
       echo "killarney_gpu_sbatch: sequential mode — keep this shell open until the sweep completes" >&2
     fi
     for threshold in ${CONF_THRESHOLDS}; do
       job_id="$(_killarney_gpu_sbatch_submit_one "${scene}" "${sparse_view}" "${max_steps}" "${timelimit}" "${threshold}")"
+      if [[ "${sweep_mode}" == "sequential" ]]; then
+        _had_wait_for_slurm_job "${job_id}"
+      fi
+    done
+    return 0
+  fi
+
+  if [[ -n "${CONF_TEMPERATURES:-}" ]]; then
+    local temperature
+    echo "killarney_gpu_sbatch: sweep CONF_TEMPERATURES=${CONF_TEMPERATURES} (mode=sigmoid) CONF_SWEEP_SUBMIT_MODE=${sweep_mode}" >&2
+    if [[ "${sweep_mode}" == "sequential" ]]; then
+      echo "killarney_gpu_sbatch: sequential mode — keep this shell open until the sweep completes" >&2
+    fi
+    for temperature in ${CONF_TEMPERATURES}; do
+      job_id="$(
+        UNCERTAINTY_MASK_MODE=sigmoid \
+          _killarney_gpu_sbatch_submit_one \
+            "${scene}" "${sparse_view}" "${max_steps}" "${timelimit}" \
+            "${UNCERTAINTY_MASK_THRESHOLD:-0.9}" "${temperature}"
+      )"
       if [[ "${sweep_mode}" == "sequential" ]]; then
         _had_wait_for_slurm_job "${job_id}"
       fi
@@ -250,6 +294,12 @@ killarney_gpu_sbatch() {
 # Usage: killarney_gpu_sbatch_sweep <scene_id> [sparse_view] [max_steps] [time_limit]
 killarney_gpu_sbatch_sweep() {
   CONF_THRESHOLDS="${CONF_THRESHOLDS:-0.5 0.6 0.7 0.8 0.9 0.95}" killarney_gpu_sbatch "$@"
+}
+
+# Convenience alias: sigmoid temperature sweep with default CONF_TEMPERATURES if unset.
+# Usage: killarney_gpu_sbatch_temp_sweep <scene_id> [sparse_view] [max_steps] [time_limit]
+killarney_gpu_sbatch_temp_sweep() {
+  CONF_TEMPERATURES="${CONF_TEMPERATURES:-0.05 0.1 0.2}" killarney_gpu_sbatch "$@"
 }
 
 had_export_pythonpath() {

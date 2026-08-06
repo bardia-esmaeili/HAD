@@ -41,15 +41,23 @@ SPARSE_VIEW="${SPARSE_VIEW:-9}"
 VIEW_FUSION="${VIEW_FUSION:-${DEFAULT_VIEW_FUSION}}"
 USE_LVSM="${USE_LVSM:-1}"
 USE_ORACLE="${USE_ORACLE:-0}"
+USE_DIFIX_DELTA="${USE_DIFIX_DELTA:-0}"
 DATA_FACTOR="${DATA_FACTOR:-4}"
 MAX_STEPS="${MAX_STEPS:-${DEFAULT_MAX_STEPS}}"
 TARGET_SAMPLE_STEP="${TARGET_SAMPLE_STEP:-${DEFAULT_TARGET_SAMPLE_STEP}}"
 MIPNERF_SPLIT_ROOT="${MIPNERF_SPLIT_ROOT:-${DATA_ROOT}}"
 SPLIT_JSON="${SPLIT_JSON:-}"
 UNCERTAINTY_MASK_THRESHOLD="${UNCERTAINTY_MASK_THRESHOLD:-0.9}"
+UNCERTAINTY_MASK_MODE="${UNCERTAINTY_MASK_MODE:-binary}"
+UNCERTAINTY_MASK_TEMPERATURE="${UNCERTAINTY_MASK_TEMPERATURE:-1.0}"
 
+# Confidence source: mutually exclusive. Gating (MODE/THRESHOLD/TEMPERATURE) is orthogonal.
 if [ "${USE_ORACLE}" = "1" ]; then
   USE_LVSM=0
+  USE_DIFIX_DELTA=0
+elif [ "${USE_DIFIX_DELTA}" = "1" ]; then
+  USE_LVSM=0
+  USE_ORACLE=0
 fi
 
 if [ "${USE_ORACLE}" = "1" ]; then
@@ -61,6 +69,17 @@ if [ "${USE_ORACLE}" = "1" ]; then
   CONF_FLAG="--use_conf"
   LVSM_FLAG="--no-use_lvsm"
   PERFECT_CONF_FLAG="--use_pefect_conf"
+  DIFIX_DELTA_FLAG="--no-use_difix_delta_conf"
+elif [ "${USE_DIFIX_DELTA}" = "1" ]; then
+  if [ "${DATASET}" = "mipnerf360" ]; then
+    METHOD_NAME="dreamaware3d_mipnerf360_difix_delta_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
+  else
+    METHOD_NAME="dreamaware3d_difix_delta_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
+  fi
+  CONF_FLAG="--use_conf"
+  LVSM_FLAG="--no-use_lvsm"
+  PERFECT_CONF_FLAG="--no-use_pefect_conf"
+  DIFIX_DELTA_FLAG="--use_difix_delta_conf"
 elif [ "${USE_LVSM}" = "1" ]; then
   if [ "${DATASET}" = "mipnerf360" ]; then
     METHOD_NAME="dreamaware3d_mipnerf360_view${SPARSE_VIEW}_fusion${VIEW_FUSION}"
@@ -70,6 +89,7 @@ elif [ "${USE_LVSM}" = "1" ]; then
   CONF_FLAG="--use_conf"
   LVSM_FLAG="--use_lvsm"
   PERFECT_CONF_FLAG="--no-use_pefect_conf"
+  DIFIX_DELTA_FLAG="--no-use_difix_delta_conf"
 else
   if [ "${DATASET}" = "mipnerf360" ]; then
     METHOD_NAME="dreamaware3d_mipnerf360_no_lvsm_view${SPARSE_VIEW}"
@@ -79,6 +99,7 @@ else
   CONF_FLAG="--no-use_conf"
   LVSM_FLAG="--no-use_lvsm"
   PERFECT_CONF_FLAG="--no-use_pefect_conf"
+  DIFIX_DELTA_FLAG="--no-use_difix_delta_conf"
 fi
 
 if [ ! -f "${SCENES_FILE}" ]; then
@@ -142,7 +163,7 @@ for IDX in "${!SCENES[@]}"; do
   fi
 
   mkdir -p "${SCENE_OUTPUT_ROOT}"
-  echo "Processing scene: ${SCENE_ID} dataset=${DATASET} rank=${RANK}/${WORLD_SIZE} use_lvsm=${USE_LVSM} use_oracle=${USE_ORACLE}"
+  echo "Processing scene: ${SCENE_ID} dataset=${DATASET} rank=${RANK}/${WORLD_SIZE} use_lvsm=${USE_LVSM} use_oracle=${USE_ORACLE} use_difix_delta=${USE_DIFIX_DELTA}"
   echo "Data dir: ${DATA}"
   echo "Output root: ${SCENE_OUTPUT_ROOT}"
   if [ -n "${SCENE_SPLIT_JSON}" ]; then
@@ -161,13 +182,16 @@ for IDX in "${!SCENES[@]}"; do
       ${CONF_FLAG} \
       --no-partial_setting \
       ${LVSM_FLAG} \
+      ${DIFIX_DELTA_FLAG} \
       --no-lvsm_mode \
       --no-normalize-world-space \
       --num_sparse_view "${SPARSE_VIEW}" \
       --target_sample_step "${TARGET_SAMPLE_STEP}" \
       --max_steps "${MAX_STEPS}" \
       --view_fusion "${VIEW_FUSION}" \
+      --uncertainty_mask_mode "${UNCERTAINTY_MASK_MODE}" \
       --uncertainty_mask_threshold "${UNCERTAINTY_MASK_THRESHOLD}" \
+      --uncertainty_mask_temperature "${UNCERTAINTY_MASK_TEMPERATURE}" \
       "${SPLIT_ARGS[@]}"; then
     echo "Completed scene: ${SCENE_ID}"
   else

@@ -136,6 +136,8 @@ class Config:
     use_pefect_conf: bool = True
     use_conf: bool = True
     use_lvsm: bool = True
+    # Confidence from 1 - L1(3DGS render, DiFix); mutually exclusive with LVSM/oracle in launchers.
+    use_difix_delta_conf: bool = False
     lvsm_mode: bool = False
     partial_setting: bool = False
 
@@ -157,8 +159,12 @@ class Config:
     ssim_lambda: float = 0.2
     # Weight for iterative 3d update
     novel_data_lambda: float = 0.3
-    # Keep novel-view pixels where uncertainty_mask > this value (training loss gating).
+    # Novel-view confidence gating: "binary" hard threshold, or "sigmoid" soft threshold.
+    uncertainty_mask_mode: Literal["binary", "sigmoid"] = "binary"
+    # Keep novel-view pixels where uncertainty_mask > this value (binary), or soft-threshold center (sigmoid).
     uncertainty_mask_threshold: float = 0.9
+    # Temperature for sigmoid gating. Smaller → closer to hard threshold; larger → softer weights.
+    uncertainty_mask_temperature: float = 1.0
 
     # Near plane clipping distance
     near_plane: float = 0.01
@@ -767,7 +773,17 @@ class Runner:
                 pixels = pixels * (alpha_masks > 0.5).float()
 
             if is_novel_data and uncertainty_masks is not None:
-                mask = (uncertainty_masks > cfg.uncertainty_mask_threshold).float()
+                if cfg.uncertainty_mask_mode == "binary":
+                    mask = (uncertainty_masks > cfg.uncertainty_mask_threshold).float()
+                elif cfg.uncertainty_mask_mode == "sigmoid":
+                    # Soft threshold: sigmoid((conf - threshold) / T); T → 0 recovers binary.
+                    temperature = max(cfg.uncertainty_mask_temperature, 1e-8)
+                    mask = torch.sigmoid(
+                        (uncertainty_masks - cfg.uncertainty_mask_threshold)
+                        / temperature
+                    )
+                else:
+                    assert_never(cfg.uncertainty_mask_mode)
                 colors = colors * mask
                 pixels = pixels * mask
 
@@ -974,7 +990,16 @@ class Runner:
                 if step == cfg.max_steps - 1:
                     is_last = True
                 # self.fix(step, is_last)
-                self.fix(step, is_last, cfg.use_eval, cfg.use_conf, cfg.use_pefect_conf, cfg.use_lvsm, cfg.lvsm_mode)
+                self.fix(
+                    step,
+                    is_last,
+                    cfg.use_eval,
+                    cfg.use_conf,
+                    cfg.use_pefect_conf,
+                    cfg.use_lvsm,
+                    cfg.lvsm_mode,
+                    use_difix_delta_conf=cfg.use_difix_delta_conf,
+                )
             
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -1147,7 +1172,18 @@ class Runner:
     # confidence_maps: list of tensors, each with shape [1, H, W]
 
     @torch.no_grad()
-    def fix(self, step: int, is_last=False, using_eval=True, use_conf=False, use_pefect_conf=True, use_lvsm=True, lvsm_mode=False, image_level=False):
+    def fix(
+        self,
+        step: int,
+        is_last=False,
+        using_eval=True,
+        use_conf=False,
+        use_pefect_conf=True,
+        use_lvsm=True,
+        lvsm_mode=False,
+        image_level=False,
+        use_difix_delta_conf=False,
+    ):
         print("Running fixer...")
         if len(self.cfg.fix_steps) == 1:
             novel_poses = self.parser.camtoworlds[self.target.indices]
@@ -1465,6 +1501,52 @@ class Runner:
                 )
                 # Reliability map in [0, 1]; higher = closer to GT (same polarity as difix3D_conf).
                 confs = 1.0 - F.l1_loss(difix_batch, gt_tensor, reduction="none").mean(dim=1, keepdim=True)
+
+                merged_difix3D_image, merged_conf = self.merge_by_confidence(
+                    output_images, confs.cpu()
+                )
+
+                output_image = merged_difix3D_image.squeeze()
+                output_image = output_image.cpu().permute(1, 2, 0).numpy()
+                output_image = Image.fromarray((output_image * 255).astype(np.uint8))
+
+                os.makedirs(f"{self.render_dir}/novel/{step}/Fixed", exist_ok=True)
+                output_image.save(f"{self.render_dir}/novel/{step}/Fixed/{i:04d}.png")
+
+                conf = merged_conf.squeeze().cpu().numpy()
+                os.makedirs(f"{self.render_dir}/novel/{step}/Mask", exist_ok=True)
+                Image.fromarray((conf * 255).astype(np.uint8), mode="L").save(
+                    f"{self.render_dir}/novel/{step}/Mask/{i:04d}.png"
+                )
+            elif use_difix_delta_conf:
+                # DiFix change-magnitude confidence: same DiFix × view_fusion path as
+                # LVSM/oracle, but score with 1 - mean_channel(L1(difix, 3DGS render)).
+                # Same [0, 1] polarity as difix3D_conf / oracle (higher = more reliable).
+                # Orthogonal to binary vs sigmoid((conf - thr) / T) loss gating.
+                ref_indices = top_N_ref_index[i]
+                output_images = []
+                for ref_idx in ref_indices[: self.cfg.view_fusion]:
+                    ref_image = Image.open(self.parser.image_paths[ref_idx]).convert("RGB").resize(
+                        image.size, Image.Resampling.LANCZOS
+                    )
+                    output_image = self.difix(
+                        prompt="remove degradation",
+                        image=image,
+                        ref_image=ref_image,
+                        num_inference_steps=1,
+                        timesteps=[199],
+                        guidance_scale=0.0,
+                    ).images[0]
+                    output_image = output_image.resize(image.size, Image.LANCZOS)
+                    output_images.append(transforms.ToTensor()(output_image))
+
+                difix_batch = torch.stack(output_images, dim=0).to(self.device)  # [K, 3, H, W]
+                pred_tensor = transforms.ToTensor()(image).to(self.device).unsqueeze(0).expand(
+                    difix_batch.shape[0], -1, -1, -1
+                )
+                confs = 1.0 - F.l1_loss(difix_batch, pred_tensor, reduction="none").mean(
+                    dim=1, keepdim=True
+                )
 
                 merged_difix3D_image, merged_conf = self.merge_by_confidence(
                     output_images, confs.cpu()
